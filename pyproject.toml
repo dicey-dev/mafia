@@ -1,0 +1,56 @@
+[project]
+name = "mafia"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "langchain>=1.2.0",
+    "langchain-google-genai>=4.1.2",
+    "langchain-openai>=1.1.6",
+    "pydantic>=2.12.5",
+    "python-dotenv>=1.2.1",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.10",
+]
+
+[tool.ruff]
+# Target Python version for lint rules
+target-version = "py313"
+
+# Max line length (Black-compatible)
+line-length = 79
+
+exclude = [
+  ".venv",
+  "build",
+  "dist",
+  "__pycache__",
+]
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle errors
+  "F",   # pyflakes
+  "W",   # pycodestyle warnings
+  "I",   # import sorting (isort replacement)
+  "B",   # bugbear
+  "UP",  # pyupgrade
+]
+
+ignore = [
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "basic"
+pythonVersion = "3.13"
