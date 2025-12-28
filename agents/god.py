@@ -1,10 +1,12 @@
 import random
 import re
 
+from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from agents.player import PlayerAgent
+from agents.tools import GOD_TOOLS
 from game.types import Role
 
 
@@ -14,17 +16,65 @@ class GodAgent:
     ):
         self.llm = llm
         self.name = f"GOD [{name}]"
-        self.system = SystemMessage(content=(system_prompt))
+        self.system_prompt = system_prompt
+        self.agent = None
+        self._initialize_agent()
+
+    def _initialize_agent(self):
+        """Initialize the agent with god tools."""
+        try:
+            self.agent = create_agent(
+                model=self.llm,
+                tools=GOD_TOOLS,
+                system_prompt=self.system_prompt,
+            )
+        except Exception as e:
+            # Fallback if agent creation fails (e.g., unsupported model)
+            print(f"Warning: God agent creation failed: {e}")
+            self.agent = None
 
     def __str__(self) -> str:
         return self.name
 
-    def decide(self, prompt: str) -> str:
-        return str(
-            self.llm.invoke(
-                [self.system, HumanMessage(content=prompt)]
-            ).content
-        ).strip()
+    def decide(self, prompt: str, use_tools: bool = True) -> str:
+        """Make a decision as god.
+
+        Args:
+            prompt: The prompt to respond to
+            use_tools: Whether to use tools
+
+        Returns:
+            God's response
+        """
+        if use_tools and self.agent:
+            # Invoke agent with messages in new format
+            result = self.agent.invoke(
+                {"messages": [{"role": "user", "content": prompt}]}
+            )
+            # Extract response from the result
+            if isinstance(result, dict):
+                if "messages" in result:
+                    # Get last message from messages array
+                    last_msg = result["messages"][-1]
+                    if isinstance(last_msg, dict):
+                        return last_msg.get("content", "").strip()
+                    else:
+                        return str(last_msg.content).strip()
+                elif "output" in result:
+                    return result.get("output", "").strip()
+                else:
+                    return str(result).strip()
+            else:
+                return str(result).strip()
+        else:
+            return str(
+                self.llm.invoke(
+                    [
+                        SystemMessage(content=self.system_prompt),
+                        HumanMessage(content=prompt),
+                    ]
+                ).content
+            ).strip()
 
     def _normalize_name(self, text: str) -> str:
         """Normalize LLM output to improve matching."""
@@ -55,10 +105,12 @@ class GodAgent:
         )
 
         for player in players:
+            proposals_text = "\n".join(proposals)
             raw = str(
                 player.speak(
-                    f"{prompt}\nAmongst: {choices_block}.\n As per the "
-                    "following proposals,{'\n'.join(proposals)}\n{instruction}"
+                    f"{prompt}\nAmongst: {choices_block}.\n"
+                    f"As per the following proposals:\n{proposals_text}\n"
+                    f"{instruction}"
                 )
             ).strip()
 
