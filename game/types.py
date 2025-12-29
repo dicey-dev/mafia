@@ -7,12 +7,3 @@ class Role(str, Enum):
     HEALER = "healer"
     DETECTIVE = "detective"
     ALL = "all"
-
-
-class Phase(str, Enum):
-    NIGHT = "night"
-    DAY = "day"
-    VOTING = "voting"
-
-
-PlayerName = str

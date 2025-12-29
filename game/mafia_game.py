@@ -14,55 +14,55 @@ class MafiaGame:
         self.round_no = 0
         self.summary = ""
         self.logs: list[str] = []
-        self.user_instruction: str = ""
 
     def assign_roles(self) -> None:
         random.shuffle(self.players)
         roles = (
-            [Role.MAFIA] * 2
-            + [Role.DETECTIVE] * 2
+            [Role.MAFIA] * 1
+            + [Role.DETECTIVE] * 1
             + [Role.HEALER]
-            + [Role.VILLAGER] * (len(self.players) - 5)
+            + [Role.VILLAGER]
         )
-        for player, role in zip(self.players, roles):
+        for player, role in zip(self.players, roles, strict=False):
             player.role = role
             # Reinitialize agent with role-specific tools
             player._initialize_agent()
 
     def reset_match(self) -> None:
-        self.round_no, self.summary, self.logs = (0, "", [])
+        self.round_no, self.summary, self.logs, self.alive_players = (
+            0,
+            "",
+            [],
+            self.players[:],
+        )
 
     def add_log(self, message: str):
-        """Add log and sync to all alive players' memories.
+        """Add public log and sync to all alive players' memories.
 
         Args:
-            message: Message to log (can already include [GOD]: or player prefix)
+            message: Message to log (can already include [GOD]: or
+                player prefix)
         """
         # If message doesn't start with a bracket, assume it's from god
-        if not message.startswith("["):
-            formatted_message = f"[GOD {self.god}]: {message}"
-        else:
-            formatted_message = message
-
-        print(formatted_message)
-        self.logs.append(formatted_message)
+        self.logs.append(message)
+        print(message)
         # Sync to all alive players
         for player in self.alive_players:
-            player.add_public_log(formatted_message)
+            player.memory.append(message)
 
-    def get_user_instruction(self) -> str:
-        """Get special instruction from user via stdin.
+    def add_private_log_to_role(self, role: Role, message: str):
+        """Add private log to players with specific role and print.
 
-        Returns:
-            User instruction string
+        Args:
+            role: The role to add the log to
+            message: Message to log (role prefix will be added if not GOD)
         """
-        print(f"\n[GOD {self.god}]: Do you have any special instructions for this round?")
-        print("(Press Enter for none, or type your instruction):")
-        try:
-            instruction = input().strip()
-            return instruction
-        except (EOFError, KeyboardInterrupt):
-            return ""
+        # Print to terminal
+
+        # Add to private logs of players with this role
+        for player in self.alive_players:
+            if player.role == role:
+                player.memory.append(message)
 
     def discuss(self, role: Role, players: list[PlayerAgent]) -> str:
         """Handle discussion phase for a specific role.
@@ -77,48 +77,93 @@ class MafiaGame:
         if not players:
             return ""
 
-        other_alive = [
-            p.name
-            for p in self.alive_players
-            if p.name in [pp.name for pp in self.alive_players]
-        ]
+        alive_player_names = [p.name for p in self.alive_players]
 
         if role == Role.MAFIA:
             proposal_prompt = (
                 "You are mafia. Discuss with other mafias who to kill. "
-                "Use propose_kill tool to suggest a target. "
-                f"Available targets: {', '.join(other_alive)}"
+                "IMPORTANT: When you want to suggest a target, you MUST use the propose_kill tool. "
+                "Do NOT just say 'I propose we kill X' in text - you must call the propose_kill tool. "
+                f"Available targets: {', '.join(alive_player_names)}"
             )
         elif role == Role.HEALER:
             proposal_prompt = (
                 "You are the healer. Choose who to heal. "
-                f"Available targets: {', '.join(other_alive)}"
+                "IMPORTANT: When you want to choose a target to heal, you MUST use the propose_heal tool. "
+                "Do NOT just say 'I want to heal X' in text - you must call the propose_heal tool. "
+                f"Available targets: {', '.join(alive_player_names)}"
             )
         elif role == Role.DETECTIVE:
             proposal_prompt = (
                 "You are detectives. Discuss who to investigate. "
-                "Use suspect_player tool to suggest a target. "
-                f"Available targets: {', '.join(other_alive)}"
+                "IMPORTANT: When you want to suggest a target to investigate, you MUST use the suspect_player tool. "
+                "Do NOT just say 'I suspect X' in text - you must call the suspect_player tool. "
+                f"Available targets: {', '.join(alive_player_names)}"
             )
         else:
             # Day discussion
             proposal_prompt = (
                 "Discuss your thoughts, raise suspicion, point "
                 "out anomalous behaviour of others. If you're the mafia, "
-                "try to deceive. Use accuse_player to accuse, defend_self "
-                "to defend. These players are still alive: "
+                "try to deceive. "
+                "IMPORTANT: When you want to accuse someone, you MUST use the accuse_player tool. "
+                "When you need to defend yourself, you MUST use the defend_self tool. "
+                "Do NOT just describe these actions in text - you must call the appropriate tools. "
+                "These players are still alive: "
                 f"{', '.join([p.name for p in self.alive_players])}"
             )
 
         proposals = []
-        for p in players:
-            # Sync latest logs before discussion
-            p.sync_logs(self.logs)
-            response = p.speak(proposal_prompt, use_tools=True)
-            proposal_msg = f"[{p.name}]: {response}"
-            proposals.append(proposal_msg)
-            if role == Role.ALL:
-                self.add_log(proposal_msg)
+        # Everyone gets to speak twice
+        num_iterations = 2
+        for iteration in range(num_iterations):
+            for p in players:
+                # Provide different context for second iteration
+                if iteration == 0:
+                    current_prompt = proposal_prompt
+                else:
+                    current_prompt = (
+                        f"{proposal_prompt}\n"
+                        "This is your second chance to speak. "
+                        "Consider what others have said and provide additional thoughts or respond to their statements. "
+                        "Do not simply repeat your previous statement."
+                    )
+
+                response = p.speak(current_prompt + "\n".join(proposals))
+                # Extract clean response (remove player name prefix if present)
+                clean_response = response
+                if response.startswith(f"[{p.name}]:"):
+                    clean_response = response.split(":", 1)[1].strip()
+
+                # Skip if this is a duplicate of the last message from this player
+                proposal_msg = f"[{p.name}]: {clean_response}"
+                # Check if this is a duplicate of the last proposal from this player
+                is_duplicate = False
+                if proposals:
+                    # Look backwards for the last message from this player
+                    for prev_msg in reversed(proposals):
+                        if prev_msg.startswith(f"[{p.name}]:"):
+                            prev_content = (
+                                prev_msg.split(":", 1)[1].strip()
+                                if ":" in prev_msg
+                                else prev_msg
+                            )
+                            if (
+                                prev_content.strip().lower()
+                                == clean_response.strip().lower()
+                            ):
+                                is_duplicate = True
+                            break
+
+                if not is_duplicate:
+                    proposals.append(proposal_msg)
+                    # Log discussions: private for role-specific,
+                    # public for day discussion
+                    if role == Role.ALL:
+                        self.add_log(proposal_msg)
+                    else:
+                        self.add_private_log_to_role(role, proposal_msg)
+                        print(proposal_msg)
 
         # Collect votes using round-robin format
         target = self.collect_votes_round_robin(role, players, proposals)
@@ -137,8 +182,6 @@ class MafiaGame:
         Returns:
             Selected player
         """
-        if not players:
-            raise ValueError("No players provided to collect_votes")
 
         # Valid targets are all alive players (can vote for anyone alive)
         all_alive_names = [p.name for p in self.alive_players]
@@ -157,30 +200,41 @@ class MafiaGame:
 
         # Round-robin voting
         for player in players:
-            # Sync logs before voting
-            player.sync_logs(self.logs)
-            self.add_log(f"{player.name}")
             choices_block = "\n".join(sorted(valid_names))
             instruction = (
                 f"{prompt_base}\nAmongst: {choices_block}.\n"
-                f"Proposals from discussion:\n{chr(10).join(proposals)}\n"
-                "Choose exactly ONE name from the list above. "
-                "Use vote_for_player tool or return the name directly."
+                f"Proposals from discussion:\n{'\n'.join(proposals)}\n"
+                "IMPORTANT: You MUST use the vote_for_player tool to cast your vote. "
+                "Do NOT just say 'I vote for X' in text - you must call the vote_for_player tool. "
+                "Choose exactly ONE name from the list above."
             )
-            raw = player.speak(instruction, use_tools=True).strip()
-            normalized = self.god._normalize_name(raw)
+            print(f"[GOD {self.god}]: {player.name}, who do you wish to vote?")
+            raw_response = player.speak(instruction).strip()
+
+            # Extract player name from response
+            # The vote_for_player tool returns "I vote for {player_name}"
+            # But the response might not always follow this format
+            vote_for = None
+            prefix = "I vote for "
+            if raw_response.startswith(prefix):
+                vote_for = raw_response[len(prefix) :].strip()
+            else:
+                # If response doesn't start with prefix, treat entire response
+                # as potential name
+                vote_for = raw_response
 
             # Extract player name from response
             matched = None
             # Check for exact match
-            if normalized in valid_names:
-                matched = normalized
+            if vote_for and vote_for in valid_names:
+                matched = vote_for
             else:
                 # Check for substring match
-                for name in valid_names:
-                    if name.lower() in normalized.lower():
-                        matched = name
-                        break
+                if vote_for:
+                    for name in valid_names:
+                        if name.lower() in vote_for.lower():
+                            matched = name
+                            break
 
             if matched:
                 vote_mp[matched] += 1
@@ -191,9 +245,14 @@ class MafiaGame:
                 vote_mp[fallback] += 1
                 vote_msg = f"[{player.name}]: I vote for {fallback} (fallback)"
 
-            self.add_log(vote_msg)
+            # Log votes: private for role-specific, public for day voting
+            if role == Role.ALL:
+                self.add_log(vote_msg)
+            else:
+                self.add_private_log_to_role(role, vote_msg)
+                print(vote_msg)
 
-        # Determine winner
+        # Determine winner or loser however you look at it
         max_votes = max(vote_mp.values())
         top_candidates = [
             name for name, count in vote_mp.items() if count == max_votes
@@ -214,85 +273,83 @@ class MafiaGame:
             self.round_no += 1
             print(f"\n{'*' * 20} ROUND {self.round_no} {'*' * 20}")
 
+            print(
+                f"Mafias: {', '.join([p.name for p in self.alive_players if p.role == Role.MAFIA])}"
+            )
+            print(
+                f"Healers: {', '.join([p.name for p in self.alive_players if p.role == Role.HEALER])}"
+            )
+            print(
+                f"Detectives: {', '.join([p.name for p in self.alive_players if p.role == Role.DETECTIVE])}"
+            )
+            print(
+                f"Villagers: {', '.join([p.name for p in self.alive_players if p.role == Role.VILLAGER])}"
+            )
+
+            print("*" * (40 + len(f" ROUND {self.round_no} ")))
+
             # Night phase
-            self.add_log("City goes to sleep")
+            self.add_log(f"[GOD {self.god}]: City goes to sleep")
 
             # Mafia phase
-            self.add_log("Mafias wake up, who you want to kill?")
+            self.add_log(
+                f"[GOD {self.god}]: Mafias wake up, who you want to kill?"
+            )
             mafia_players = [
                 p for p in self.alive_players if p.role == Role.MAFIA
             ]
-            if mafia_players:
-                to_kill = self.discuss(role=Role.MAFIA, players=mafia_players)
-            else:
-                to_kill = ""
-            self.add_log("Mafias go to sleep")
+            to_kill = self.discuss(role=Role.MAFIA, players=mafia_players)
+            self.add_log(f"[GOD {self.god}]: Mafias go to sleep")
 
             # Healer phase
-            self.add_log("Healers wake up, who you want to heal?")
+            self.add_log(
+                f"[GOD {self.god}]: Healers wake up, who you want to heal?"
+            )
             healer_players = [
                 p for p in self.alive_players if p.role == Role.HEALER
             ]
-            if healer_players:
-                to_heal = self.discuss(
-                    role=Role.HEALER, players=healer_players
-                )
-            else:
-                to_heal = ""
+            to_heal = self.discuss(role=Role.HEALER, players=healer_players)
 
-            self.add_log("Healers go to sleep")
+            self.add_log(f"[GOD {self.god}]: Healers go to sleep")
 
             # Detective phase
-            self.add_log("Detectives wake up. Who do you suspect?")
+            self.add_log(
+                f"[GOD {self.god}]: Detectives wake up, who do you suspect?"
+            )
             detective_players = [
                 p for p in self.alive_players if p.role == Role.DETECTIVE
             ]
-            if detective_players:
-                to_check_name = self.discuss(
-                    role=Role.DETECTIVE, players=detective_players
+            to_check_name = self.discuss(
+                role=Role.DETECTIVE, players=detective_players
+            )
+            # Find the player object
+            to_check_player = next(
+                (
+                    player
+                    for player in self.alive_players
+                    if player.name == to_check_name
+                ),
+                None,
+            )
+            if to_check_player:
+                is_mafia = to_check_player.role == Role.MAFIA
+                reveal_msg = (
+                    f"{to_check_player.name} is "
+                    f"{'' if is_mafia else 'not '}a mafia."
                 )
-                # Find the player object
-                to_check_player = next(
-                    (
-                        player
-                        for player in self.alive_players
-                        if player.name == to_check_name
-                    ),
-                    None,
+                # Private reveal to detectives only - use role-based
+                # private log
+                self.add_private_log_to_role(
+                    Role.DETECTIVE, f"[GOD {self.god}]: {reveal_msg}"
                 )
-                if to_check_player:
-                    is_mafia = to_check_player.role == Role.MAFIA
-                    reveal_msg = (
-                        f"{to_check_player.name} is "
-                        f"{'' if is_mafia else 'not '}a mafia."
-                    )
-                    # Private reveal to detectives only
-                    for detective in detective_players:
-                        detective.add_private_log(f"[GOD]: {reveal_msg}")
-                    self.add_log(
-                        f"Yes {to_check_player.name} is {'a mafia' if is_mafia else 'not a mafia'}"
-                    )
-            else:
-                to_check_player = None
+                print(f"[GOD {self.god}]: {reveal_msg}")
 
-            self.add_log("Detectives go to sleep")
-
-            # User instruction phase
-            self.user_instruction = self.get_user_instruction()
-            if self.user_instruction:
-                self.add_log(
-                    f"Special instruction received: {self.user_instruction}"
-                )
-                # Let god process the instruction
-                god_response = self.god.decide(
-                    f"Special instruction: {self.user_instruction}. "
-                    "Acknowledge and explain how you will follow it."
-                )
-                self.add_log(f"God acknowledges: {god_response}")
+            self.add_log(f"[GOD {self.god}]: Detectives go to sleep")
 
             # Day phase
+            death_msg = "no one" if to_kill == to_heal else to_kill
             self.add_log(
-                f"City wakes up, finding {'no one' if to_kill == to_heal else to_kill} dead."
+                f"[GOD {self.god}]: City wakes up, finding {death_msg} dead."
             )
             # Remove killed player if not healed
             if to_kill and to_kill != to_heal:
@@ -301,21 +358,12 @@ class MafiaGame:
                     for player in self.alive_players
                     if player.name != to_kill
                 ]
-                # Mark as dead
-                killed_player = next(
-                    (p for p in self.players if p.name == to_kill), None
-                )
-                if killed_player:
-                    killed_player.alive = False
 
             # Day discussion
-            self.add_log("Discussion begins. Share suspicions and defend.")
             to_eliminate_name = self.discuss(
                 role=Role.ALL, players=self.alive_players
             )
 
-            # Voting phase
-            self.add_log("Voting begins.")
             to_eliminate = next(
                 (
                     player
@@ -326,21 +374,22 @@ class MafiaGame:
             )
 
             if to_eliminate:
-                if to_eliminate.role == Role.MAFIA:
-                    self.add_log(
-                        f"A Mafia ({to_eliminate.name}) has been eliminated."
-                    )
-                else:
-                    self.add_log(
-                        f"{to_eliminate.name} has been voted out and he was not a mafia."
-                    )
+                prompt = (
+                    f"The voting has concluded and {to_eliminate.name} "
+                    f"has been voted to be eliminated. "
+                    f"Since this is time to make the last announcement "
+                    f"of the round related to elimination, use "
+                    f"get_special_instruction tool to get instruction "
+                    f"from the user about how announcement should be like"
+                )
+                god_announcement = self.god.decide(prompt)
+                self.add_log(god_announcement)
                 # Remove eliminated player
                 self.alive_players = [
                     p
                     for p in self.alive_players
                     if p.name != to_eliminate.name
                 ]
-                to_eliminate.alive = False
 
             self.summary = summarize_round(self.god.llm, self.logs)
             print(f"\n{'*' * 20} ROUND {self.round_no} ENDS {'*' * 20}\n")
@@ -359,3 +408,4 @@ class MafiaGame:
             if len(mafia_alive) >= len(town_alive):
                 print("Mafia wins!")
                 break
+        self.reset_match()

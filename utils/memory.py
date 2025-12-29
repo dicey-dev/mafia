@@ -11,11 +11,3 @@ def summarize_round(
         HumanMessage(content="\n".join(round_logs)),
     ]
     return str(llm.invoke(messages).content)
-
-
-def summarize_memory(llm: ChatGoogleGenerativeAI, memory: list[str]) -> str:
-    messages = [
-        SystemMessage(content="Summarize these memory logs"),
-        HumanMessage(content="\n".join(memory)),
-    ]
-    return str(llm.invoke(messages).content)

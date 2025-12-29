@@ -3,8 +3,6 @@
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
-from game.types import Role
-
 
 class VoteInput(BaseModel):
     """Input for voting on a player."""
@@ -47,8 +45,11 @@ class DefendSelfInput(BaseModel):
 def vote_for_player(player_name: str) -> str:
     """Vote for a player during voting phase.
 
+    IMPORTANT: Use this tool when you need to cast your vote. Do NOT just say "I vote for X" in text.
+    You MUST call this tool with the player's name to register your vote.
+
     Args:
-        player_name: Name of the player to vote for
+        player_name: Name of the player to vote for (must be an exact match from available players)
 
     Returns:
         Confirmation message
@@ -60,8 +61,11 @@ def vote_for_player(player_name: str) -> str:
 def propose_kill(target: str) -> str:
     """Propose a kill target as mafia.
 
+    IMPORTANT: Use this tool when discussing who to kill with other mafias.
+    Do NOT just say "I propose we kill X" in text. You MUST call this tool to make your proposal.
+
     Args:
-        target: Name of the player to kill
+        target: Name of the player to kill (must be an exact match from available players)
 
     Returns:
         Proposal message
@@ -73,8 +77,11 @@ def propose_kill(target: str) -> str:
 def propose_heal(target: str) -> str:
     """Propose a heal target as healer.
 
+    IMPORTANT: Use this tool when choosing who to heal.
+    Do NOT just say "I want to heal X" in text. You MUST call this tool to make your choice.
+
     Args:
-        target: Name of the player to heal
+        target: Name of the player to heal (must be an exact match from available players)
 
     Returns:
         Proposal message
@@ -86,8 +93,11 @@ def propose_heal(target: str) -> str:
 def suspect_player(target: str) -> str:
     """Suspect a player for investigation as detective.
 
+    IMPORTANT: Use this tool when discussing who to investigate with other detectives.
+    Do NOT just say "I suspect X" in text. You MUST call this tool to make your suggestion.
+
     Args:
-        target: Name of the player to investigate
+        target: Name of the player to investigate (must be an exact match from available players)
 
     Returns:
         Suspicion message
@@ -99,9 +109,13 @@ def suspect_player(target: str) -> str:
 def accuse_player(target: str, reason: str) -> str:
     """Publicly accuse a player during discussion.
 
+    IMPORTANT: Use this tool when you want to publicly accuse someone during day discussion.
+    Do NOT just say "I accuse X because Y" in text. You MUST call this tool to make your accusation.
+    This tool will format your accusation properly for public discussion.
+
     Args:
-        target: Name of the player to accuse
-        reason: Reason for the accusation
+        target: Name of the player to accuse (must be an exact match from available players)
+        reason: Clear reason for the accusation (explain why you suspect them)
 
     Returns:
         Accusation message
@@ -113,8 +127,12 @@ def accuse_player(target: str, reason: str) -> str:
 def defend_self(statement: str) -> str:
     """Defend yourself against accusations.
 
+    IMPORTANT: Use this tool when you need to defend yourself against accusations.
+    Do NOT just say "Let me defend myself" in text. You MUST call this tool with your defense statement.
+    This tool will format your defense properly for public discussion.
+
     Args:
-        statement: Your defense statement
+        statement: Your defense statement (explain why the accusations are wrong)
 
     Returns:
         Defense message
@@ -123,44 +141,11 @@ def defend_self(statement: str) -> str:
 
 
 # God tools
-class AnnounceInput(BaseModel):
-    """Input for god announcements."""
-
-    message: str = Field(description="Message to announce")
-    to_roles: list[Role] = Field(
-        default=[], description="Roles to send message to (None = all)"
-    )
-
-
 class PrivateRevealInput(BaseModel):
     """Input for private detective reveal."""
 
     player_name: str = Field(description="Name of investigated player")
     is_mafia: bool = Field(description="Whether the player is mafia")
-
-
-class ExecuteActionInput(BaseModel):
-    """Input for executing night action."""
-
-    action_type: str = Field(description="Type of action (kill, heal)")
-    target: str = Field(description="Target player name")
-
-
-@tool("announce", args_schema=AnnounceInput)
-def announce(message: str, to_roles: list[Role] | None = None) -> str:
-    """Announce a message as god.
-
-    Args:
-        message: Message to announce
-        to_roles: Roles to send message to (None = all)
-
-    Returns:
-        Announcement confirmation
-    """
-    if to_roles:
-        roles_str = ", ".join([r.value for r in to_roles])
-        return f"Announcing to {roles_str}: {message}"
-    return f"Announcing to all: {message}"
 
 
 @tool("private_reveal", args_schema=PrivateRevealInput)
@@ -178,32 +163,47 @@ def private_reveal(player_name: str, is_mafia: bool) -> str:
     return f"{player_name} {status} a mafia"
 
 
-@tool("execute_night_action", args_schema=ExecuteActionInput)
-def execute_night_action(action_type: str, target: str) -> str:
-    """Execute a night action (kill or heal).
+@tool("get_special_instruction")
+def get_special_instruction() -> str:
+    """Get special instruction from user via stdin.
 
-    Args:
-        action_type: Type of action (kill, heal)
-        target: Target player name
-
-    Returns:
-        Execution confirmation
+    Use this tool when you need special instructions from the user
+    to make an announcement or decision.
+    The tool will block waiting for user input.
     """
-    return f"Executing {action_type} on {target}"
+    print("\n[GOD]: Do you have any special instructions for this round?")
+    print("(Press Enter for none, or type your instruction):")
+    try:
+        instruction = input().strip()
+        return instruction
+    except (EOFError, KeyboardInterrupt):
+        return ""
+
+
+@tool("exit_game")
+def exit_game() -> None:
+    """Exit the game immediately.
+
+    WARNING: This tool should ONLY be used when explicitly instructed
+    by the user via special_instruction. Do NOT use this tool under
+    any other circumstances. Using this tool will terminate the entire
+    game program.
+    """
+    exit(1)
 
 
 # Player tool list (roles get different subsets)
-PLAYER_TOOLS = [
-    vote_for_player,
-    accuse_player,
-    defend_self,
-]
+PLAYER_TOOLS = [vote_for_player, accuse_player, defend_self, suspect_player]
 
 MAFIA_TOOLS = PLAYER_TOOLS + [propose_kill]
 
 HEALER_TOOLS = PLAYER_TOOLS + [propose_heal]
 
-DETECTIVE_TOOLS = PLAYER_TOOLS + [suspect_player]
+DETECTIVE_TOOLS = PLAYER_TOOLS
 
 # God tools
-GOD_TOOLS = [announce, private_reveal, execute_night_action]
+GOD_TOOLS = [
+    private_reveal,
+    exit_game,
+    get_special_instruction,
+]
